@@ -1,467 +1,500 @@
 # app.py
 import streamlit as st
-import os
 import sys
-import tempfile
+import os
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from src.rag_pipeline import ingest_pdf, answer_question
-from src.llm_handler import get_available_models, check_model_available
-from src.vector_store import get_collection_count
-from config import DEFAULT_MODEL
+from src.rag_pipeline import answer_question
+from src.llm_handler  import get_available_models, check_model_available
 from utils.helpers import (
     init_session_state,
     get_current_history,
     add_to_history,
-    clear_current_model_history,
-    clear_all_history,
     on_model_change,
-    get_total_message_count,
+    get_active_chat,
+    create_chat,
+    delete_chat,
+    process_pdf_upload,
+    switch_to_chat,
+    start_new_chat,
+    rename_chat,
+    save_after_message,
 )
 
-# --- Page Configuration ---
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="EDIS — Enterprise Document Intelligence",
+    page_title="EDIS",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed",
 )
 
-# --- Custom CSS ---
+# ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Syne:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@300;400;500;600&display=swap');
 
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: #0a0a0f;
-    color: #e2e8f0;
-    font-family: 'Syne', sans-serif;
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"], .main {
+    background: #212121 !important;
+    color: #ececec !important;
+    font-family: 'Inter', sans-serif !important;
 }
-[data-testid="stAppViewContainer"] {
-    background-image:
-        radial-gradient(ellipse at 20% 20%, rgba(99, 102, 241, 0.07) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 80%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
-}
+[data-testid="stAppViewContainer"] > section > div:first-child { padding-top: 0 !important; }
+[data-testid="stMainBlockContainer"] { padding: 0 !important; max-width: 100% !important; }
+.block-container { padding-top: 0 !important; padding-bottom: 0 !important; }
+[data-testid="stHeader"] { display: none !important; }
+#MainMenu, footer { visibility: hidden !important; }
+
 [data-testid="stSidebar"] {
-    background-color: #0f0f1a !important;
-    border-right: 1px solid rgba(99, 102, 241, 0.2) !important;
+    background: #171717 !important;
+    border-right: 1px solid #2f2f2f !important;
+    padding: 0 !important;
 }
-[data-testid="stSidebar"] * { font-family: 'Syne', sans-serif !important; }
-#MainMenu, footer, header {visibility: hidden;}
-[data-testid="stDecoration"] {display: none;}
-.edis-header {
-    display: flex; align-items: center; gap: 16px;
-    padding: 32px 0 8px 0;
-    border-bottom: 1px solid rgba(99, 102, 241, 0.25);
-    margin-bottom: 8px;
+[data-testid="stSidebar"] > div:first-child { padding: 0 !important; }
+[data-testid="collapsedControl"] { color: #ececec !important; background: transparent !important; }
+
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border: none !important; box-shadow: none !important;
+    padding: 0 !important; margin-top: 0 !important;
 }
-.edis-logo {
-    width: 48px; height: 48px;
-    background: linear-gradient(135deg, #6366f1, #10b981);
-    border-radius: 12px; display: flex; align-items: center;
-    justify-content: center; font-size: 24px; flex-shrink: 0;
+[data-testid="stVerticalBlockBorderWrapper"] > div { padding: 0 !important; }
+div[data-testid="element-container"]:has(> div[data-testid="stVerticalBlockBorderWrapper"]) {
+    padding: 0 !important; margin: 0 !important;
 }
-.edis-title {
-    font-family: 'Syne', sans-serif; font-weight: 800; font-size: 28px;
-    letter-spacing: -0.5px;
-    background: linear-gradient(90deg, #a5b4fc, #6ee7b7);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin: 0; line-height: 1.1;
-}
-.edis-subtitle {
-    font-family: 'JetBrains Mono', monospace; font-size: 11px;
-    color: #64748b; letter-spacing: 2px; text-transform: uppercase;
-    margin: 4px 0 0 0;
-}
-.sidebar-label {
-    font-family: 'JetBrains Mono', monospace; font-size: 10px;
-    letter-spacing: 2px; text-transform: uppercase;
-    color: #475569; margin: 16px 0 8px 0;
-}
-[data-testid="stFileUploader"] {
-    background: rgba(99,102,241,0.05) !important;
-    border: 1px dashed rgba(99,102,241,0.3) !important;
-    border-radius: 10px !important; padding: 8px !important;
-}
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] { gap: 0 !important; }
+.stMainBlockContainer > div > div > div { gap: 0 !important; }
+
 .stButton > button {
-    background: linear-gradient(135deg, #6366f1, #4f46e5) !important;
-    color: white !important; border: none !important;
-    border-radius: 8px !important;
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 600 !important; letter-spacing: 0.5px !important;
-    padding: 10px 20px !important; transition: all 0.2s ease !important;
+    background: transparent !important; border: none !important;
+    color: #ececec !important; font-family: 'Inter', sans-serif !important;
+    cursor: pointer !important; transition: background 0.15s !important;
+    padding: 6px 10px !important; border-radius: 6px !important;
 }
-.stButton > button:hover {
-    background: linear-gradient(135deg, #818cf8, #6366f1) !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 20px rgba(99,102,241,0.4) !important;
-}
-[data-testid="stChatMessage"] {
-    background: rgba(15,15,26,0.8) !important;
-    border: 1px solid rgba(99,102,241,0.15) !important;
-    border-radius: 12px !important; margin-bottom: 12px !important;
-    padding: 4px !important;
-}
+.stButton > button:hover { background: #2f2f2f !important; }
+
 [data-testid="stChatInput"] {
-    background: #0f0f1a !important;
-    border: 1px solid rgba(99,102,241,0.3) !important;
+    background: #2f2f2f !important;
+    border: 1px solid #3f3f3f !important;
     border-radius: 12px !important;
 }
 [data-testid="stChatInput"] textarea {
-    font-family: 'Syne', sans-serif !important;
-    color: #e2e8f0 !important; background: transparent !important;
+    color: #ececec !important; font-family: 'Inter', sans-serif !important;
+    background: transparent !important;
+}
+[data-testid="stChatMessage"] {
+    background: transparent !important; border: none !important; padding: 8px 0 !important;
 }
 [data-testid="stExpander"] {
-    background: rgba(99,102,241,0.05) !important;
-    border: 1px solid rgba(99,102,241,0.15) !important;
+    background: #2a2a2a !important; border: 1px solid #3f3f3f !important;
     border-radius: 8px !important;
 }
-[data-testid="stMetric"] {
-    background: rgba(99,102,241,0.08) !important;
-    border: 1px solid rgba(99,102,241,0.2) !important;
-    border-radius: 10px !important; padding: 12px 16px !important;
+[data-testid="stSelectbox"] > div > div {
+    background: #2f2f2f !important; border: 1px solid #3f3f3f !important;
+    color: #ececec !important; border-radius: 12px !important;
+    font-size: 13px !important; font-family: 'Inter', sans-serif !important;
 }
-[data-testid="stMetricValue"] {
-    font-family: 'JetBrains Mono', monospace !important;
-    color: #a5b4fc !important; font-size: 28px !important;
+[data-testid="stTextInput"] > div > div > input {
+    background: #2a2a2a !important; border: 1px solid #6366f1 !important;
+    border-radius: 6px !important; color: #ececec !important;
+    font-size: 13px !important; padding: 5px 8px !important;
+    font-family: 'Inter', sans-serif !important;
 }
-.feature-card {
-    background: rgba(99,102,241,0.06);
-    border: 1px solid rgba(99,102,241,0.18);
-    border-radius: 12px; padding: 24px 20px; height: 100%;
+[data-testid="stFileUploader"] {
+    background: #2a2a2a !important; border: 1px dashed #3f3f3f !important;
+    border-radius: 12px !important;
 }
-.feature-icon { font-size: 28px; margin-bottom: 12px; }
-.feature-title {
-    font-family: 'Syne', sans-serif; font-weight: 700;
-    font-size: 15px; color: #a5b4fc; margin-bottom: 8px;
-}
-.feature-desc { font-size: 13px; color: #64748b; line-height: 1.6; }
-.doc-card {
-    background: rgba(16,185,129,0.06);
-    border: 1px solid rgba(16,185,129,0.2);
-    border-radius: 10px; padding: 12px 16px; margin: 8px 0;
-}
-.doc-name {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px; color: #6ee7b7; word-break: break-all;
-}
-.model-badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-family: 'JetBrains Mono', monospace; font-size: 10px;
-    color: #a5b4fc; background: rgba(99,102,241,0.12);
-    border: 1px solid rgba(99,102,241,0.25);
-    border-radius: 20px; padding: 2px 10px; margin-bottom: 6px;
-}
-hr { border-color: rgba(99,102,241,0.15) !important; }
 ::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: #0a0a0f; }
-::-webkit-scrollbar-thumb { background: rgba(99,102,241,0.4); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3f3f3f; border-radius: 4px; }
+hr { border-color: #2f2f2f !important; }
+
+.input-row > div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    display: flex !important; align-items: flex-end !important; padding-bottom: 0 !important;
+}
+.input-row .stButton > button {
+    height: 45px !important; width: 45px !important; padding: 0 !important;
+    font-size: 20px !important; border: 1px solid #3f3f3f !important;
+    border-radius: 12px !important; background: #2f2f2f !important;
+    display: flex !important; align-items: center !important;
+    justify-content: center !important; margin-bottom: 1px !important;
+}
+.input-row .stButton > button:hover {
+    border-color: #6366f1 !important; background: #3a3a3a !important;
+}
+.input-row [data-testid="stSelectbox"] label { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Initialize all session state in one clean call ──
+# ── Boot ───────────────────────────────────────────────────────────────────────
 init_session_state()
-
 models = get_available_models()
 
+active_chat_exists = any(
+    c["id"] == st.session_state.active_chat_id
+    for c in st.session_state.chats
+)
 
-# ════════════════════════════════════════
-# SIDEBAR
-# ════════════════════════════════════════
+# Show/hide floating input bar
+if not active_chat_exists:
+    st.markdown("""
+    <style>
+    [data-testid="stBottom"], [data-testid="stBottom"] > *,
+    div[class*="stChatFloatingInputContainer"],
+    section[class*="stChatFloatingInputContainer"] {
+        display: none !important; height: 0 !important;
+        min-height: 0 !important; overflow: hidden !important;
+        padding: 0 !important; margin: 0 !important;
+    }
+    </style>""", unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <style>
+    [data-testid="stBottom"] { display: flex !important; height: auto !important; }
+    </style>""", unsafe_allow_html=True)
+
+
+# ── UI helpers (pure rendering, no logic) ─────────────────────────────────────
+def render_message(message: dict):
+    """Renders one message bubble. No logic — display only."""
+    with st.chat_message(message["role"]):
+        if message["role"] == "assistant":
+            m_info = models.get(message.get("model", ""), {})
+            st.markdown(
+                f"<span style='font-size:11px;color:#6b6b6b;"
+                f"font-family:JetBrains Mono,monospace;'>"
+                f"{m_info.get('icon','🤖')} {message.get('model','')}</span>",
+                unsafe_allow_html=True
+            )
+        st.markdown(message["content"])
+        if message["role"] == "assistant" and message.get("context"):
+            with st.expander("📚 Source Chunks"):
+                for i, chunk in enumerate(message["context"]):
+                    st.markdown(f"**Chunk {i+1}**")
+                    st.markdown(
+                        f"<small style='color:#8e8ea0;font-family:JetBrains Mono,"
+                        f"monospace;font-size:12px;line-height:1.6;'>{chunk}</small>",
+                        unsafe_allow_html=True
+                    )
+                    if i < len(message["context"]) - 1:
+                        st.divider()
+
+
+# ════════════════════════════════════════════════════════
+# SIDEBAR — navigation only
+# ════════════════════════════════════════════════════════
 with st.sidebar:
 
+    # Logo
     st.markdown("""
-    <div style="padding: 20px 0 8px 0;">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
-            <div style="width:36px;height:36px;
+    <div style="padding:18px 16px 14px;border-bottom:1px solid #2f2f2f;">
+        <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:30px;height:30px;
                         background:linear-gradient(135deg,#6366f1,#10b981);
-                        border-radius:9px;display:flex;align-items:center;
-                        justify-content:center;font-size:18px;flex-shrink:0;">🧠</div>
-            <span style="font-family:'Syne',sans-serif;font-weight:800;font-size:20px;
-                         background:linear-gradient(90deg,#a5b4fc,#6ee7b7);
-                         -webkit-background-clip:text;
-                         -webkit-text-fill-color:transparent;">EDIS</span>
-        </div>
-        <p style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#475569;
-                  letter-spacing:2px;text-transform:uppercase;margin:0 0 0 48px;">
-            Document Intelligence
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.divider()
-
-    # ── Model Selector ──
-    st.markdown('<p class="sidebar-label">Select Model</p>', unsafe_allow_html=True)
-
-    st.selectbox(
-        "Model",
-        options=list(models.keys()),
-        index=st.session_state.model_index,
-        label_visibility="collapsed",
-        key="_model_selector",
-        on_change=lambda: on_model_change(models),
-    )
-
-    # Model Info Card
-    m = models[st.session_state.selected_model]
-    is_ready = check_model_available(st.session_state.selected_model)
-    current_history = get_current_history()
-    total_msgs = get_total_message_count()
-    ready_html = "<span style='color:#10b981;'>✅ Ready</span>" if is_ready \
-                 else "<span style='color:#ef4444;'>❌ Not Available</span>"
-
-    st.markdown(f"""
-    <div style="background:rgba(99,102,241,0.06);
-                border:1px solid rgba(99,102,241,0.18);
-                border-radius:8px;padding:10px 12px;margin:4px 0 8px 0;">
-        <div style="font-size:20px;margin-bottom:4px;">{m['icon']}</div>
-        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;
-                    color:#a5b4fc;margin-bottom:2px;">{m['description']}</div>
-        <div style="font-size:11px;color:#475569;margin-bottom:4px;">Speed: {m['speed']}</div>
-        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;">{ready_html}</div>
-        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;
-                    color:#475569;margin-top:4px;">
-            💬 {len(current_history)} this model · {total_msgs} total
+                        border-radius:7px;display:flex;align-items:center;
+                        justify-content:center;font-size:15px;">🧠</div>
+            <span style="font-weight:600;font-size:15px;color:#ececec;">EDIS</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    if len(current_history) > 0:
-        if st.button("🗑️ Clear This Model's Chat", use_container_width=True):
-            clear_current_model_history()
-            st.rerun()
+    # New Chat
+    st.markdown("<div style='padding:10px 10px 6px;'>", unsafe_allow_html=True)
+    if st.button("＋  New Chat", use_container_width=True, key="new_chat_btn"):
+        start_new_chat()
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.divider()
+    # Chat list
+    if st.session_state.chats:
+        st.markdown(
+            "<p style='font-size:10px;color:#6b6b6b;padding:4px 16px 4px;"
+            "letter-spacing:0.08em;text-transform:uppercase;margin:0;'>Recent</p>",
+            unsafe_allow_html=True
+        )
 
-    # ── Upload Section ──
-    st.markdown('<p class="sidebar-label">Document Upload</p>', unsafe_allow_html=True)
+        for chat in st.session_state.chats:
+            is_active = chat["id"] == st.session_state.active_chat_id
+            menu_open = st.session_state.open_menu_id == chat["id"]
+            renaming  = st.session_state.renaming_chat_id == chat["id"]
+            row_bg    = "background:#2a2a2a;border-radius:8px;" if is_active else ""
 
-    uploaded_file = st.file_uploader(
-        "Drop PDF here",
-        type="pdf",
-        label_visibility="collapsed"
-    )
+            st.markdown(f"<div style='margin:1px 8px;{row_bg}'>", unsafe_allow_html=True)
 
-    if uploaded_file is not None:
-        st.caption(f"📄 {uploaded_file.name}")
-        st.caption(f"📦 {round(uploaded_file.size / 1024, 1)} KB")
+            if renaming:
+                c1, c2, c3 = st.columns([5, 1, 1])
+                with c1:
+                    new_name = st.text_input(
+                        "rename", value=chat["name"],
+                        label_visibility="collapsed",
+                        key=f"rename_input_{chat['id']}",
+                    )
+                with c2:
+                    if st.button("✓", key=f"ok_{chat['id']}"):
+                        rename_chat(chat, new_name)
+                        st.rerun()
+                with c3:
+                    if st.button("✕", key=f"cancel_{chat['id']}"):
+                        st.session_state.renaming_chat_id = None
+                        st.rerun()
 
-        if st.button("⚡  Process Document", type="primary", use_container_width=True):
-            with st.spinner("Parsing · Chunking · Indexing..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    tmp_path = tmp.name
-                result = ingest_pdf(tmp_path, uploaded_file.name)
-                os.unlink(tmp_path)
+            elif menu_open:
+                c1, c2 = st.columns([5, 1])
+                with c1:
+                    display = chat["name"][:22] + "…" if len(chat["name"]) > 22 else chat["name"]
+                    st.markdown(
+                        f"<p style='font-size:13px;color:#ececec;padding:6px 4px 2px 8px;"
+                        f"margin:0;white-space:nowrap;overflow:hidden;"
+                        f"text-overflow:ellipsis;'>{display}</p>",
+                        unsafe_allow_html=True
+                    )
+                with c2:
+                    if st.button("✕", key=f"close_menu_{chat['id']}"):
+                        st.session_state.open_menu_id = None
+                        st.rerun()
 
-                if result["success"]:
-                    st.session_state.pdf_loaded = True
-                    st.session_state.pdf_name = uploaded_file.name
-                    clear_all_history()  # ← clean function call
-                    st.success(f"✅ Indexed {result['chunks']} chunks")
-                else:
-                    st.error(result["message"])
+                st.markdown("""
+                <div style="background:#1e1e1e;border:1px solid #3a3a3a;
+                            border-radius:8px;margin:2px 4px 4px;overflow:hidden;">
+                """, unsafe_allow_html=True)
+                cr, cd = st.columns(2)
+                with cr:
+                    if st.button("✏️  Rename", key=f"rename_btn_{chat['id']}", use_container_width=True):
+                        st.session_state.renaming_chat_id = chat["id"]
+                        st.session_state.open_menu_id     = None
+                        st.rerun()
+                with cd:
+                    if st.button("🗑  Delete", key=f"delete_btn_{chat['id']}", use_container_width=True):
+                        delete_chat(chat["id"])
+                        st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.session_state.pdf_loaded:
-        st.divider()
-        st.markdown('<p class="sidebar-label">Active Document</p>', unsafe_allow_html=True)
-        st.markdown(f"""
-        <div class="doc-card">
-            <div class="doc-name">📄 {st.session_state.pdf_name}</div>
+            else:
+                c1, c2 = st.columns([8, 1])
+                with c1:
+                    display = chat["name"][:24] + "…" if len(chat["name"]) > 24 else chat["name"]
+                    label   = ("▌ " if is_active else "") + display
+                    if st.button(label, key=f"select_{chat['id']}", use_container_width=True):
+                        if not is_active:
+                            switch_to_chat(chat)
+                            st.rerun()
+                with c2:
+                    if st.button("⋯", key=f"dots_{chat['id']}"):
+                        st.session_state.open_menu_id = chat["id"]
+                        st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    else:
+        st.markdown(
+            "<p style='font-size:13px;color:#4b4b4b;padding:12px 16px;'>No chats yet</p>",
+            unsafe_allow_html=True
+        )
+
+
+# ════════════════════════════════════════════════════════
+# MAIN — pure rendering
+# ════════════════════════════════════════════════════════
+active_chat = get_active_chat()
+
+
+# ── LANDING PAGE ──────────────────────────────────────────────────────────────
+if active_chat is None:
+    _, center, _ = st.columns([1, 2, 1])
+    with center:
+        st.markdown("<div style='height:80px;'></div>", unsafe_allow_html=True)
+        st.markdown("""
+        <div style="text-align:center;margin-bottom:36px;">
+            <div style="width:54px;height:54px;
+                        background:linear-gradient(135deg,#6366f1,#10b981);
+                        border-radius:14px;display:flex;align-items:center;
+                        justify-content:center;font-size:26px;
+                        margin:0 auto 14px;">🧠</div>
+            <h1 style="font-size:26px;font-weight:600;color:#ececec;margin:0 0 8px;">
+                Enterprise Document Intelligence
+            </h1>
+            <p style="font-size:14px;color:#8e8ea0;margin:0;">
+                Upload a PDF to start chatting with your document
+            </p>
         </div>
         """, unsafe_allow_html=True)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Chunks", get_collection_count())
-        with col2:
-            st.metric("Total Chats", total_msgs)
+        uploaded_file = st.file_uploader(
+            "Upload PDF", type="pdf",
+            label_visibility="collapsed",
+            key="landing_uploader",
+        )
 
-        if st.button("🗑️  Clear Document + All Chats", use_container_width=True):
-            from src.vector_store import clear_collection
-            clear_collection()
-            st.session_state.pdf_loaded = False
-            st.session_state.pdf_name = ""
-            clear_all_history()  # ← clean function call
-            st.rerun()
-
-    st.divider()
-    st.markdown("""
-    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;
-                color:#334155;line-height:1.8;">
-        LLaMA · Gemini · Groq · ChromaDB<br>
-        sentence-transformers · LangChain<br>
-        BE AI&ML · Final Year Project
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ════════════════════════════════════════
-# MAIN AREA
-# ════════════════════════════════════════
-
-st.markdown("""
-<div class="edis-header">
-    <div class="edis-logo">🧠</div>
-    <div>
-        <p class="edis-title">Enterprise Document Intelligence</p>
-        <p class="edis-subtitle">RAG · Vector Search · Multi-Model · Local + Cloud</p>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ── Empty State ──
-if not st.session_state.pdf_loaded:
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-    <p style="font-family:'JetBrains Mono',monospace;font-size:12px;
-              color:#475569;letter-spacing:1px;text-align:center;margin-bottom:32px;">
-        UPLOAD A DOCUMENT FROM THE SIDEBAR TO BEGIN
-    </p>
-    """, unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns(3)
-    cards = [
-        ("📄", "PDF Ingestion",
-         "Extracts and chunks text from any PDF using PyMuPDF with smart overlap preservation"),
-        ("🔍", "Semantic Search",
-         "Finds relevant content by meaning using sentence-transformers + ChromaDB vector store"),
-        ("🤖", "Multi-Model AI",
-         "Switch between models freely — each keeps its own memory, all shown in one timeline"),
-    ]
-    for col, (icon, title, desc) in zip([col1, col2, col3], cards):
-        with col:
-            st.markdown(f"""
-            <div class="feature-card">
-                <div class="feature-icon">{icon}</div>
-                <div class="feature-title">{title}</div>
-                <div class="feature-desc">{desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-    <p style="font-family:'JetBrains Mono',monospace;font-size:10px;
-              color:#334155;text-align:center;letter-spacing:1px;">
-        AVAILABLE MODELS
-    </p>
-    """, unsafe_allow_html=True)
-
-    model_cols = st.columns(len(models))
-    for col, (name, info) in zip(model_cols, models.items()):
-        with col:
-            ready = check_model_available(name)
-            st.markdown(f"""
-            <div style="text-align:center;padding:8px 4px;
-                        background:rgba(99,102,241,0.04);
-                        border:1px solid rgba(99,102,241,0.12);
-                        border-radius:8px;">
-                <div style="font-size:16px;">{info['icon']}</div>
-                <div style="font-family:'JetBrains Mono',monospace;font-size:8px;
-                            color:#64748b;margin-top:2px;line-height:1.4;">
-                    {name.split('(')[0].strip()}
-                </div>
-                <div style="font-size:9px;margin-top:2px;">
-                    {"✅" if ready else "⚪"}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("""
-    <p style="text-align:center;font-family:'JetBrains Mono',monospace;
-              font-size:10px;color:#334155;">
-        PyMuPDF · sentence-transformers · ChromaDB · LangChain · Streamlit
-    </p>
-    """, unsafe_allow_html=True)
-
-# ── Chat State ──
-else:
-    active_model = models[st.session_state.selected_model]
-    current_history = get_current_history()
-
-    # Active model banner
-    st.markdown(f"""
-    <div style="display:inline-flex;align-items:center;gap:8px;
-                background:rgba(99,102,241,0.08);
-                border:1px solid rgba(99,102,241,0.2);
-                border-radius:100px;padding:4px 14px;margin-bottom:16px;">
-        <span style="font-size:14px;">{active_model['icon']}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#a5b4fc;">
-            {st.session_state.selected_model}
-        </span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#475569;">
-            · {len(current_history)} messages · {get_total_message_count()} total
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Render global timeline — never clears on model switch ──
-    for message in st.session_state.global_timeline:
-        with st.chat_message(message["role"]):
-            if message["role"] == "assistant":
-                msg_model = models.get(message.get("model", ""), {})
-                st.markdown(
-                    f'<div class="model-badge">'
-                    f'{msg_model.get("icon","🤖")}&nbsp;{message.get("model","")}'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            st.markdown(message["content"])
-            if message["role"] == "assistant" and message.get("context"):
-                with st.expander("📚 Source Chunks"):
-                    for i, chunk in enumerate(message["context"]):
-                        st.markdown(f"**Chunk {i+1}**")
-                        st.markdown(
-                            f"<small style='color:#94a3b8;"
-                            f"font-family:JetBrains Mono,monospace;"
-                            f"line-height:1.6;'>{chunk}</small>",
-                            unsafe_allow_html=True
-                        )
-                        if i < len(message["context"]) - 1:
-                            st.divider()
-
-    # ── Chat Input ──
-    if question := st.chat_input(
-        f"Ask anything about {st.session_state.pdf_name}..."
-    ):
-        add_to_history("user", question)
-
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.chat_message("assistant"):
-            with st.spinner(
-                f"Retrieving · Reasoning via {st.session_state.selected_model}..."
-            ):
-                result = answer_question(
-                    question,
-                    st.session_state.selected_model,
-                    current_history[:-1]
-                )
-
+        if uploaded_file is not None:
             st.markdown(
-                f'<div class="model-badge">'
-                f'{active_model.get("icon","🤖")}&nbsp;{st.session_state.selected_model}'
-                f'</div>',
+                f"<p style='font-size:13px;color:#10b981;margin:10px 0 12px;'>"
+                f"✓ &nbsp;{uploaded_file.name} &nbsp;·&nbsp;"
+                f"{round(uploaded_file.size/1024,1)} KB</p>",
                 unsafe_allow_html=True
             )
-            st.markdown(result["answer"])
+            if st.button("Process Document", type="primary",
+                         use_container_width=True, key="process_landing"):
+                result = process_pdf_upload(uploaded_file)
+                if result["success"]:
+                    create_chat(uploaded_file.name, result["chunks"])
+                    st.session_state.pdf_loaded = True
+                    st.session_state.pdf_name   = uploaded_file.name
+                    st.rerun()
+                else:
+                    st.error(result["message"])
 
-            if result["success"] and result["context"]:
-                with st.expander("📚 Source Chunks"):
-                    for i, chunk in enumerate(result["context"]):
-                        st.markdown(f"**Chunk {i+1}**")
-                        st.markdown(
-                            f"<small style='color:#94a3b8;"
-                            f"font-family:JetBrains Mono,monospace;"
-                            f"line-height:1.6;'>{chunk}</small>",
-                            unsafe_allow_html=True
-                        )
-                        if i < len(result["context"]) - 1:
-                            st.divider()
+        st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
 
+        c1, c2, c3 = st.columns(3)
+        for col, (icon, title, desc) in zip([c1, c2, c3], [
+            ("🔍", "Semantic Search", "Finds answers by meaning, not just keywords"),
+            ("🤖", "Multi-Model",     "Switch between LLaMA, Gemini, Groq"),
+            ("💬", "Memory",          "Each model keeps its own conversation memory"),
+        ]):
+            with col:
+                st.markdown(f"""
+                <div style="background:#2a2a2a;border:1px solid #3f3f3f;
+                            border-radius:10px;padding:16px 14px;text-align:center;">
+                    <div style="font-size:20px;margin-bottom:8px;">{icon}</div>
+                    <div style="font-size:13px;font-weight:500;
+                                color:#ececec;margin-bottom:4px;">{title}</div>
+                    <div style="font-size:12px;color:#8e8ea0;line-height:1.5;">{desc}</div>
+                </div>""", unsafe_allow_html=True)
+
+
+# ── CHAT PAGE ─────────────────────────────────────────────────────────────────
+else:
+    current_history = get_current_history()
+
+    # Top bar
+    st.markdown(f"""
+    <div style="padding:16px 24px 8px;">
+        <h2 style="font-size:18px;font-weight:600;color:#ececec;margin:0;">
+            {active_chat['name']}
+        </h2>
+        <p style="font-size:12px;color:#8e8ea0;margin:4px 0 0;
+                  font-family:'JetBrains Mono',monospace;">
+            📄 {active_chat['pdf_name']} &nbsp;·&nbsp; {active_chat['chunks']} chunks
+        </p>
+    </div>
+    <hr style="margin:0 24px 0;border-color:#2f2f2f;">
+    """, unsafe_allow_html=True)
+
+    # Messages container
+    msg_container = st.container(height=550, border=False)
+    with msg_container:
+        if not st.session_state.global_timeline:
+            st.markdown("""
+            <div style="display:flex;align-items:center;justify-content:center;
+                        min-height:300px;">
+                <p style="font-size:15px;color:#3a3a3a;text-align:center;">
+                    Ask anything about your document
+                </p>
+            </div>""", unsafe_allow_html=True)
+        else:
+            for msg in st.session_state.global_timeline:
+                render_message(msg)
+        
+        # Show thinking indicator if we're waiting for response
+        if st.session_state.get("waiting_for_response", False):
+            with st.chat_message("assistant"):
+                st.markdown("🤔 **Thinking...**")
+                st.markdown("<span style='font-size:12px;color:#8e8ea0;'>Generating response...</span>", unsafe_allow_html=True)
+
+    # Optional PDF attach panel
+    if st.session_state.show_pdf_uploader:
+        st.markdown("""
+        <div style="background:#2a2a2a;border:1px solid #3f3f3f;border-radius:10px;
+                    padding:16px 16px 12px;margin:0 24px 10px;">
+            <p style="font-size:12px;color:#8e8ea0;margin:0 0 10px;">
+                Upload a new PDF — creates a new chat
+            </p>""", unsafe_allow_html=True)
+        new_pdf = st.file_uploader(
+            "New PDF", type="pdf",
+            label_visibility="collapsed", key="attach_uploader"
+        )
+        if new_pdf is not None:
+            ci, cb = st.columns([3, 1])
+            with ci:
+                st.markdown(
+                    f"<p style='font-size:13px;color:#10b981;margin:0;'>"
+                    f"✓ {new_pdf.name} &nbsp;·&nbsp; {round(new_pdf.size/1024,1)} KB</p>",
+                    unsafe_allow_html=True
+                )
+            with cb:
+                if st.button("Process", key="process_attach"):
+                    result = process_pdf_upload(new_pdf)
+                    if result["success"]:
+                        create_chat(new_pdf.name, result["chunks"])
+                        st.session_state.pdf_loaded        = True
+                        st.session_state.pdf_name          = new_pdf.name
+                        st.session_state.show_pdf_uploader = False
+                        st.rerun()
+                    else:
+                        st.error(result["message"])
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Input row
+    st.markdown('<div class="input-row" style="padding:0 24px;">', unsafe_allow_html=True)
+    cp, cc, cm = st.columns([1, 9, 3])
+    with cp:
+        if st.button("＋", key="attach_btn", help="Upload a new PDF"):
+            st.session_state.show_pdf_uploader = not st.session_state.show_pdf_uploader
+            st.rerun()
+    with cc:
+        question = st.chat_input(f"Ask about {active_chat['pdf_name']}...", disabled=st.session_state.get("waiting_for_response", False))
+    with cm:
+        st.selectbox(
+            "Model", options=list(models.keys()),
+            index=st.session_state.model_index,
+            label_visibility="collapsed",
+            key="_model_selector",
+            on_change=lambda: on_model_change(models),
+            disabled=st.session_state.get("waiting_for_response", False),
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Handle new question
+    if question and not st.session_state.get("waiting_for_response", False):
+        # Add user message to history and save
+        add_to_history("user", question)
+        save_after_message()
+        
+        # Set waiting flag and rerun to show the thinking indicator
+        st.session_state.waiting_for_response = True
+        st.rerun()
+
+    # Generate assistant response
+    if (st.session_state.get("waiting_for_response", False) and
+        st.session_state.global_timeline and 
+        st.session_state.global_timeline[-1]["role"] == "user"):
+        
+        # Get the last user message
+        last_user_msg = st.session_state.global_timeline[-1]
+        user_question = last_user_msg["content"]
+        
+        # Generate response
+        result = answer_question(
+            user_question,
+            st.session_state.selected_model,
+            get_current_history()[:-1],  # Exclude the just-added user message
+        )
+        
+        # Remove the thinking indicator by clearing and re-adding messages
+        # We need to remove the temporary thinking message from display
+        # The easiest way is to clear and rebuild the conversation
+        
+        # Add assistant response to history
         add_to_history("assistant", result["answer"], result.get("context", []))
+        save_after_message()
+        
+        # Clear waiting flag
+        st.session_state.waiting_for_response = False
+        
+        # Rerun to show the final response
+        st.rerun()
